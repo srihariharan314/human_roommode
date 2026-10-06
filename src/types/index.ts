@@ -1,0 +1,148 @@
+export type SessionStatus = 'WAITING' | 'ACTIVE' | 'COMPLETED';
+
+export type ParticipantStatus = 'JOINED' | 'ACTIVE' | 'LEFT';
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
+  avatar_url?: string;
+  created_at?: string;
+}
+
+export interface TopicPrepMaterial {
+  overview: string;
+  keyPoints: string[];
+  argumentsFor: string[];
+  argumentsAgainst: string[];
+  realWorldExamples: string[];
+  importantFacts: string[];
+  counterarguments: string[];
+  keywords: string[];
+  conclusion: string;
+}
+
+export interface GDSession {
+  id: string;
+  host_id: string;
+  room_code: string;
+  topic: string;
+  topic_overview?: string | null;
+  topic_materials?: TopicPrepMaterial | null;
+  status: SessionStatus;
+  max_participants: number;
+  duration_seconds: number;
+  started_at?: string | null;
+  ended_at?: string | null;
+  gd_deadline?: string | null;
+  created_at: string;
+  host?: UserProfile;
+}
+
+export interface Participant {
+  id: string;
+  session_id: string;
+  user_id: string;
+  participant_name: string;
+  participant_avatar?: string | null;
+  is_host: boolean;
+  joined_at: string;
+  left_at?: string | null;
+  status: ParticipantStatus;
+  is_speaking?: boolean;
+  is_muted?: boolean;
+}
+
+export interface TranscriptItem {
+  id: string;
+  session_id: string;
+  user_id: string;
+  participant_name: string;
+  text: string;
+  timestamp: string;
+  start_time_offset_ms?: number;
+  end_time_offset_ms?: number;
+}
+
+export interface FillerWordStats {
+  word: string;
+  count: number;
+}
+
+export interface EvidenceItem {
+  claimOrArea: string;
+  quote: string;
+  aiObservation: string;
+  suggestion: string;
+}
+
+export interface GDResult {
+  id: string;
+  session_id: string;
+  user_id: string;
+  overall_score: number;
+  communication_score: number;
+  confidence_score: number;
+  clarity_score: number;
+  fluency_score: number;
+  relevance_score: number;
+  reasoning_score: number;
+  topic_knowledge_score: number;
+  participation_score: number;
+  teamwork_score: number;
+  leadership_score: number;
+  speaking_time_seconds: number;
+  speaking_time_formatted: string;
+  filler_word_count: number;
+  filler_words_detected: FillerWordStats[];
+  repetition_count: number;
+  created_at: string;
+}
+
+export interface GDFeedback {
+  id: string;
+  session_id: string;
+  user_id: string;
+  strengths: string[];
+  weaknesses: string[];
+  detailed_feedback: string;
+  what_did_well: string;
+  what_could_improve: string;
+  actionable_recommendations: string[];
+  evidence_examples: EvidenceItem[];
+  created_at: string;
+}
+
+export interface ParticipantAnalysisResponse {
+  result: GDResult;
+  feedback: GDFeedback;
+}
+
+export interface UserDashboardStats {
+  totalGDs: number;
+  gdsHosted: number;
+  averageScore: number;
+  bestScore: number;
+  metrics: {
+    communication: number;
+    confidence: number;
+    clarity: number;
+    fluency: number;
+    relevance: number;
+    reasoning: number;
+    topic_knowledge: number;
+    participation: number;
+    teamwork: number;
+    leadership: number;
+  };
+  recentSessions: {
+    sessionId: string;
+    topic: string;
+    date: string;
+    overallScore: number;
+    role: 'Host' | 'Participant';
+    communication: number;
+    confidence: number;
+    fluency: number;
+  }[];
+}
