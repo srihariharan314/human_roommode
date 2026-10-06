@@ -1,23 +1,8 @@
 import { createClient } from '@/lib/supabase/server';
 import { UserProfile } from '@/types';
 import { getOrCreateUserProfile } from '@/lib/db';
-import { cookies } from 'next/headers';
 
 export async function getCurrentUser(): Promise<UserProfile | null> {
-  const cookieStore = await cookies();
-  const simulatedUserCookie = cookieStore.get('intelligd_user');
-
-  if (simulatedUserCookie?.value) {
-    try {
-      const parsed = JSON.parse(simulatedUserCookie.value);
-      if (parsed?.id) {
-        return getOrCreateUserProfile(parsed);
-      }
-    } catch {
-      // Ignore parse error
-    }
-  }
-
   try {
     const supabase = await createClient();
     const { data: { user }, error } = await supabase.auth.getUser();
@@ -25,13 +10,13 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
     if (user && !error) {
       return getOrCreateUserProfile({
         id: user.id,
-        name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0],
+        name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || 'User',
         email: user.email || 'user@intelligd.com',
-        avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture,
+        avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`,
       });
     }
   } catch (err) {
-    // Supabase auth fallback
+    console.warn('Supabase auth check note:', err);
   }
 
   return null;

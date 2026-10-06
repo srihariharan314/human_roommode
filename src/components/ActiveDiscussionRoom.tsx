@@ -2,24 +2,21 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { GDSession, Participant, TranscriptItem } from '@/types';
-import { useSpeechRecognition } from '@/hooks/use-speech-recognition';
+import { useSpeechRecognition, MicStatus } from '@/hooks/use-speech-recognition';
 import { useWebRTCAudio } from '@/hooks/use-webrtc-audio';
 import { 
   Mic, 
   MicOff, 
   StopCircle, 
-  LogOut, 
   Clock, 
-  Volume2, 
-  VolumeX, 
   Sparkles, 
   Radio, 
   Users, 
   BookOpen, 
-  CheckCircle2, 
   AlertTriangle,
   Loader2,
-  ShieldCheck
+  ShieldCheck,
+  AlertCircle
 } from 'lucide-react';
 import { TopicPrepDrawer } from './TopicPrepDrawer';
 
@@ -104,7 +101,7 @@ export function ActiveDiscussionRoom({
     }
   };
 
-  const { isListening, interimText, audioLevel, isSpeaking, permissionError } = useSpeechRecognition({
+  const { micStatus, interimText, audioLevel, isSpeaking, errorMessage } = useSpeechRecognition({
     enabled: !isMuted && session.status === 'ACTIVE',
     onFinalTranscript: handleFinalSpeechTranscript,
   });
@@ -129,7 +126,7 @@ export function ActiveDiscussionRoom({
 
   const handleEnd = async () => {
     if (!isHost) return;
-    const confirm = window.confirm('Are you sure you want to end the group discussion? AI will analyze all participant contributions.');
+    const confirm = window.confirm('Are you sure you want to end the group discussion? Post-discussion AI will analyze all participant contributions individually.');
     if (!confirm) return;
 
     setIsEnding(true);
@@ -147,6 +144,46 @@ export function ActiveDiscussionRoom({
     const mins = Math.floor(totalSeconds / 60);
     const secs = totalSeconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const renderMicBadge = (status: MicStatus) => {
+    switch (status) {
+      case 'LISTENING':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold text-xs animate-pulse">
+            <Mic className="w-3.5 h-3.5 text-emerald-400" />
+            🎤 Listening
+          </span>
+        );
+      case 'READY':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-cyan-300 font-medium text-xs">
+            <Mic className="w-3.5 h-3.5 text-cyan-400" />
+            🎙 Microphone Ready
+          </span>
+        );
+      case 'MUTED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-400 text-xs">
+            <MicOff className="w-3.5 h-3.5" />
+            🔇 Muted
+          </span>
+        );
+      case 'PERMISSION_REQUIRED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-xs">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+            ⚠ Microphone Permission Required
+          </span>
+        );
+      case 'UNAVAILABLE':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold text-xs">
+            <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+            ❌ Microphone Unavailable
+          </span>
+        );
+    }
   };
 
   return (
@@ -234,17 +271,17 @@ export function ActiveDiscussionRoom({
             </button>
           ) : (
             <div className="text-[11px] font-medium text-slate-400 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-800">
-              Host controls end
+              Host controls discussion end
             </div>
           )}
 
         </div>
       </div>
 
-      {permissionError && (
-        <div className="mb-3 p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-medium flex items-center gap-2 shrink-0">
-          <AlertTriangle className="w-4 h-4 shrink-0" />
-          {permissionError}
+      {errorMessage && (
+        <div className="mb-3 p-3.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-200 text-xs font-medium flex items-center gap-2.5 shrink-0">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>{errorMessage}</span>
         </div>
       )}
 
@@ -333,8 +370,8 @@ export function ActiveDiscussionRoom({
           {/* Local Micro-Volume Meter */}
           <div className="mt-3 pt-3 border-t border-slate-800 shrink-0">
             <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
-              <span>Your Mic Level</span>
-              <span className="font-mono">{isMuted ? 'Muted' : `${audioLevel}%`}</span>
+              <span>Your Microphone</span>
+              <span className="font-mono">{isMuted ? 'Muted' : `${audioLevel}% Level`}</span>
             </div>
             <div className="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden">
               <div
@@ -356,10 +393,11 @@ export function ActiveDiscussionRoom({
                 Live Discussion Transcripts ({transcripts.length})
               </h3>
             </div>
-            <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-              Synced across all devices
-            </span>
+            
+            {/* Clear Microphone State Pill */}
+            <div>
+              {renderMicBadge(micStatus)}
+            </div>
           </div>
 
           {/* Transcript Scroll Area */}
@@ -373,7 +411,7 @@ export function ActiveDiscussionRoom({
                   Discussion is Active — Start Speaking
                 </h4>
                 <p className="text-xs text-slate-400 max-w-sm">
-                  Unmute your microphone and share your insights on the topic. Speech will be transcribed in real-time under your verified participant identity.
+                  Unmute your microphone and speak. Speech is captured on your device and synchronized in real time tagged with your verified participant name.
                 </p>
               </div>
             )}
@@ -435,7 +473,7 @@ export function ActiveDiscussionRoom({
             <div ref={transcriptEndRef} />
           </div>
 
-          {/* 3. Bottom Microphone Bar */}
+          {/* 3. Bottom Microphone Controls */}
           <div className="mt-3 pt-3 border-t border-slate-800 flex items-center justify-between gap-3 shrink-0">
             <div className="flex items-center gap-3">
               <button
@@ -449,24 +487,24 @@ export function ActiveDiscussionRoom({
                 {isMuted ? (
                   <>
                     <MicOff className="w-4 h-4" />
-                    Microphone Muted
+                    Unmute Microphone
                   </>
                 ) : (
                   <>
                     <Mic className="w-4 h-4" />
-                    Microphone Active
+                    Mute Microphone
                   </>
                 )}
               </button>
 
               <span className="text-[11px] text-slate-400 hidden sm:inline">
-                {isMuted ? 'Click to unmute and speak' : 'Your speech is being transcribed and shared live'}
+                {isMuted ? 'Your microphone is muted' : 'Speaking automatically transcribes under your identity'}
               </span>
             </div>
 
             <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              WebRTC Audio Mesh Active
+              Live Voice Mesh
             </div>
           </div>
         </div>
