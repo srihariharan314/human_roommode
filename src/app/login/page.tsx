@@ -1,19 +1,19 @@
 'use client';
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { Users, ShieldCheck, Loader2 } from 'lucide-react';
+import { Users, ShieldCheck, Loader2, AlertTriangle, Key } from 'lucide-react';
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get('next') || '/dashboard';
-  const { user, loading, signInWithGoogle } = useAuth();
+  const { user, loading, isSupabaseConfigured, signInWithGoogle } = useAuth();
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!loading && user) {
       router.replace(next);
     }
@@ -54,6 +54,22 @@ function LoginForm() {
         </p>
       </div>
 
+      {!isSupabaseConfigured && (
+        <div className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-left text-xs space-y-2">
+          <div className="flex items-center gap-2 font-bold text-amber-400">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>Supabase Setup Required</span>
+          </div>
+          <p className="text-slate-300 leading-relaxed text-[11px]">
+            To sign in with Google, add your real Supabase Project credentials to <code className="bg-slate-950 px-1.5 py-0.5 rounded text-amber-300">.env.local</code>:
+          </p>
+          <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-[10px] font-mono text-slate-300 space-y-1 overflow-x-auto">
+            <div>NEXT_PUBLIC_SUPABASE_URL=https://your-id.supabase.co</div>
+            <div>NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key</div>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="mb-6 p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-medium text-left">
           {error}
@@ -69,7 +85,7 @@ function LoginForm() {
         {signingIn ? (
           <>
             <Loader2 className="w-5 h-5 animate-spin text-slate-950" />
-            <span>Redirecting to Google...</span>
+            <span>Connecting to Google...</span>
           </>
         ) : (
           <>

@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
+  isSupabaseConfigured: boolean;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -17,9 +18,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const isSupabaseConfigured = Boolean(
+    supabaseUrl && 
+    !supabaseUrl.includes('placeholder') && 
+    supabaseUrl.startsWith('https://')
+  );
+
   // Initialize and listen to Supabase Auth state
   useEffect(() => {
     let mounted = true;
+
+    if (!isSupabaseConfigured) {
+      setLoading(false);
+      return;
+    }
+
     const supabase = createClient();
 
     async function loadUser() {
@@ -56,7 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     loadUser();
 
-    // Subscribe to auth state changes (sign in, sign out, token refresh)
+    // Subscribe to auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         const profile: UserProfile = {
@@ -82,9 +96,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [isSupabaseConfigured]);
 
   const signInWithGoogle = async () => {
+    if (!isSupabaseConfigured) {
+      throw new Error(
+        'Supabase URL is not configured yet. Please add your real NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to your .env.local file (or Vercel environment variables).'
+      );
+    }
+
     const supabase = createClient();
     const redirectUrl = `${window.location.origin}/auth/callback`;
     const { error } = await supabase.auth.signInWithOAuth({
@@ -103,11 +123,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
-    try {
-      const supabase = createClient();
-      await supabase.auth.signOut();
-    } catch (err) {
-      console.error('Sign out error:', err);
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = createClient();
+        await supabase.auth.signOut();
+      } catch (err) {
+        console.error('Sign out error:', err);
+      }
     }
     setUser(null);
   };
@@ -117,6 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       value={{
         user,
         loading,
+        isSupabaseConfigured,
         signInWithGoogle,
         signOut,
       }}
