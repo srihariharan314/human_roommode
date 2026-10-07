@@ -72,6 +72,8 @@ export function useGDRealtime({
               status: 'ACTIVE',
               started_at: payload.started_at || new Date().toISOString(),
               gd_deadline: payload.gd_deadline || null,
+              current_speaker_id: payload.current_speaker_id || prev.current_speaker_id,
+              current_turn_number: payload.current_turn_number || 1,
             }));
           } else if (type === 'HOST_ENDED_GD') {
             setSession(prev => ({
@@ -89,6 +91,12 @@ export function useGDRealtime({
               if (prev.some(t => t.id === payload.id)) return prev;
               return [...prev, payload];
             });
+          } else if (type === 'TURN_CHANGED') {
+            setSession(prev => ({
+              ...prev,
+              current_speaker_id: payload.currentSpeakerId,
+              current_turn_number: payload.turnNumber,
+            }));
           } else if (type === 'SPEAKER_STATE') {
             setActiveSpeakers(prev => ({
               ...prev,
@@ -128,6 +136,8 @@ export function useGDRealtime({
           status: 'ACTIVE',
           started_at: payload.started_at,
           gd_deadline: payload.gd_deadline,
+          current_speaker_id: payload.current_speaker_id || prev.current_speaker_id,
+          current_turn_number: payload.current_turn_number || 1,
         }));
       })
       .on('broadcast', { event: 'HOST_ENDED_GD' }, ({ payload }) => {
@@ -151,6 +161,14 @@ export function useGDRealtime({
           if (prev.some(t => t.id === payload.id)) return prev;
           return [...prev, payload];
         });
+      })
+      .on('broadcast', { event: 'TURN_CHANGED' }, ({ payload }) => {
+        if (!mounted) return;
+        setSession(prev => ({
+          ...prev,
+          current_speaker_id: payload.currentSpeakerId,
+          current_turn_number: payload.turnNumber,
+        }));
       })
       .on('broadcast', { event: 'SPEAKER_STATE' }, ({ payload }) => {
         if (!mounted) return;
@@ -221,6 +239,8 @@ export function useGDRealtime({
     const payload = {
       started_at: startedSession.started_at,
       gd_deadline: startedSession.gd_deadline,
+      current_speaker_id: startedSession.current_speaker_id,
+      current_turn_number: startedSession.current_turn_number,
     };
     if (broadcastChannelRef.current) {
       broadcastChannelRef.current.postMessage({ type: 'HOST_STARTED_GD', payload });
@@ -259,6 +279,25 @@ export function useGDRealtime({
         type: 'broadcast',
         event: 'NEW_TRANSCRIPT',
         payload: transcriptItem,
+      }).catch(() => {});
+    }
+  }, []);
+
+  const broadcastTurnChange = useCallback((currentSpeakerId: string, turnNumber: number) => {
+    setSession(prev => ({
+      ...prev,
+      current_speaker_id: currentSpeakerId,
+      current_turn_number: turnNumber,
+    }));
+    const payload = { currentSpeakerId, turnNumber };
+    if (broadcastChannelRef.current) {
+      broadcastChannelRef.current.postMessage({ type: 'TURN_CHANGED', payload });
+    }
+    if (supabaseChannelRef.current) {
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'TURN_CHANGED',
+        payload,
       }).catch(() => {});
     }
   }, []);
@@ -303,6 +342,7 @@ export function useGDRealtime({
     broadcastHostStarted,
     broadcastHostEnded,
     broadcastNewTranscript,
+    broadcastTurnChange,
     broadcastSpeakerState,
     sendWebRTCSignal,
     refreshSessionState,

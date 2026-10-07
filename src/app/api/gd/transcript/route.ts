@@ -10,7 +10,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { sessionId, text, startTimeOffsetMs, endTimeOffsetMs } = body;
+    const { sessionId, text, turnNumber, mode, startTimeOffsetMs, endTimeOffsetMs } = body;
 
     if (!sessionId || !text || text.trim().length === 0) {
       return NextResponse.json({ error: 'Missing required transcript payload.' }, { status: 400 });
@@ -25,18 +25,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Session is not active for transcript submissions.' }, { status: 400 });
     }
 
-    const transcriptItem = await addTranscript({
+    const { transcript, nextSpeaker, nextTurnNumber } = await addTranscript({
       sessionId,
       userId: user.id,
       participantName: user.name,
       text: text.trim(),
+      turnNumber,
+      mode: mode || 'speech',
       startTimeOffsetMs,
       endTimeOffsetMs,
     });
 
     return NextResponse.json({
       success: true,
-      transcript: transcriptItem,
+      transcript,
+      nextSpeaker,
+      nextTurnNumber,
     });
   } catch (error: any) {
     console.error('Error recording transcript:', error);

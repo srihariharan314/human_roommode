@@ -219,12 +219,24 @@ export async function updateSessionStatus(
 
   if (newStatus === 'ACTIVE') {
     updates.started_at = now;
+    updates.current_turn_number = 1;
+    updates.turn_status = 'speaking';
+    
+    // Choose initial speaker (first participant or host)
+    const existingParticipants = memoryStore.participants.get(sessionId) || [];
+    if (existingParticipants.length > 0) {
+      updates.current_speaker_id = existingParticipants[0].user_id;
+    } else {
+      updates.current_speaker_id = hostId;
+    }
+
     if (session.duration_seconds && session.duration_seconds > 0) {
       const deadline = new Date(Date.now() + session.duration_seconds * 1000).toISOString();
       updates.gd_deadline = deadline;
     }
   } else if (newStatus === 'COMPLETED') {
     updates.ended_at = now;
+    updates.turn_status = 'completed';
   }
 
   // Update memory store
@@ -328,6 +340,48 @@ export async function getParticipants(sessionId: string): Promise<Participant[]>
 }
 
 // -----------------------------------------------------------------------------
+// 3.1 Turn State Progression
+// -----------------------------------------------------------------------------
+export async function advanceSessionTurn(
+  sessionId: string, 
+  currentUserId?: string
+): Promise<{ session: GDSession; nextSpeaker: Participant | null; turnNumber: number }> {
+  const session = await getSessionById(sessionId);
+  if (!session) {
+    throw new Error('Session not found.');
+  }
+
+  const participants = await getParticipants(sessionId);
+  if (participants.length === 0) {
+    return { session, nextSpeaker: null, turnNumber: session.current_turn_number || 1 };
+  }
+
+  const activeSpeakerId = currentUserId || session.current_speaker_id || participants[0].user_id;
+  const currentIndex = participants.findIndex(p => p.user_id === activeSpeakerId);
+  const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % participants.length : 0;
+  const nextSpeaker = participants[nextIndex];
+  const nextTurnNumber = (session.current_turn_number || 1) + 1;
+
+  const updates: Partial<GDSession> = {
+    current_speaker_id: nextSpeaker.user_id,
+    current_turn_number: nextTurnNumber,
+    turn_status: 'speaking',
+  };
+
+  const updatedSession: GDSession = { ...session, ...updates };
+  memoryStore.sessions.set(sessionId, updatedSession);
+
+  try {
+    const supabase = createAdminClient();
+    await supabase.from('gd_sessions').update(updates).eq('id', sessionId);
+  } catch (err) {
+    // Fallback
+  }
+
+  return { session: updatedSession, nextSpeaker, turnNumber: nextTurnNumber };
+}
+
+// -----------------------------------------------------------------------------
 // 4. Transcripts
 // -----------------------------------------------------------------------------
 export async function addTranscript(params: {
@@ -335,15 +389,22 @@ export async function addTranscript(params: {
   userId: string;
   participantName: string;
   text: string;
+  turnNumber?: number;
+  mode?: 'speech' | 'text';
   startTimeOffsetMs?: number;
   endTimeOffsetMs?: number;
-}): Promise<TranscriptItem> {
+}): Promise<{ transcript: TranscriptItem; nextSpeaker: Participant | null; nextTurnNumber: number }> {
+  const session = await getSessionById(params.sessionId);
+  const currentTurn = params.turnNumber || session?.current_turn_number || 1;
+
   const newTranscript: TranscriptItem = {
     id: crypto.randomUUID(),
     session_id: params.sessionId,
     user_id: params.userId,
     participant_name: params.participantName,
     text: params.text.trim(),
+    turn_number: currentTurn,
+    mode: params.mode || 'speech',
     timestamp: new Date().toISOString(),
     start_time_offset_ms: params.startTimeOffsetMs,
     end_time_offset_ms: params.endTimeOffsetMs,
@@ -360,7 +421,19 @@ export async function addTranscript(params: {
     // Fallback
   }
 
-  return newTranscript;
+  // Advance turn automatically to next human participant
+  let nextSpeaker: Participant | null = null;
+  let nextTurnNumber = currentTurn + 1;
+
+  try {
+    const turnResult = await advanceSessionTurn(params.sessionId, params.userId);
+    nextSpeaker = turnResult.nextSpeaker;
+    nextTurnNumber = turnResult.turnNumber;
+  } catch (tErr) {
+    console.warn('Turn advance note:', tErr);
+  }
+
+  return { transcript: newTranscript, nextSpeaker, nextTurnNumber };
 }
 
 export async function getTranscripts(sessionId: string): Promise<TranscriptItem[]> {
@@ -451,6 +524,59 @@ export async function getUserResultAndFeedback(sessionId: string, userId: string
   const feedback = feedbacks.find(f => f.user_id === userId) || null;
 
   return { result, feedback };
+}
+
+export async function getAllSessionResultsAndFeedbacks(sessionId: string): Promise<Array<{ result: GDResult; feedback: GDFeedback }>> {
+  try {
+    const supabase = createAdminClient();
+    const [resData, fbData] = await Promise.all([
+      supabase.from('gd_results').select('*').eq('session_id', sessionId),
+      supabase.from('feedback').select('*').eq('session_id', sessionId),
+    ]);
+
+    if (resData.data && fbData.data && resData.data.length > 0) {
+      const fbMap = new Map((fbData.data as GDFeedback[]).map(f => [f.user_id, f]));
+      return (resData.data as GDResult[]).map(r => ({
+        result: r,
+        feedback: fbMap.get(r.user_id) || {
+          id: crypto.randomUUID(),
+          session_id: sessionId,
+          user_id: r.user_id,
+          strengths: ["Participated in group discussion"],
+          weaknesses: ["Could increase speaking turns"],
+          detailed_feedback: "Discussion assessment completed.",
+          what_did_well: "Engaged with peers.",
+          what_could_improve: "Expand on arguments.",
+          actionable_recommendations: ["Prepare key statistics beforehand"],
+          evidence_examples: [],
+          created_at: r.created_at
+        }
+      }));
+    }
+  } catch (err) {
+    // Fallback
+  }
+
+  const results = memoryStore.results.get(sessionId) || [];
+  const feedbacks = memoryStore.feedbacks.get(sessionId) || [];
+  const fbMap = new Map(feedbacks.map(f => [f.user_id, f]));
+
+  return results.map(r => ({
+    result: r,
+    feedback: fbMap.get(r.user_id) || {
+      id: crypto.randomUUID(),
+      session_id: sessionId,
+      user_id: r.user_id,
+      strengths: ["Participated in group discussion"],
+      weaknesses: ["Could increase speaking turns"],
+      detailed_feedback: "Discussion assessment completed.",
+      what_did_well: "Engaged with peers.",
+      what_could_improve: "Expand on arguments.",
+      actionable_recommendations: ["Prepare key statistics beforehand"],
+      evidence_examples: [],
+      created_at: r.created_at
+    }
+  }));
 }
 
 // -----------------------------------------------------------------------------

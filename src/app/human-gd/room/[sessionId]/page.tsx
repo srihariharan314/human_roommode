@@ -3,12 +3,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { GDSession, Participant, TranscriptItem, GDResult, GDFeedback } from '@/types';
+import { GDSession, Participant, TranscriptItem, GDResult, GDFeedback, ParticipantScoreOverview } from '@/types';
 import { useGDRealtime } from '@/hooks/use-gd-realtime';
 import { WaitingRoom } from '@/components/WaitingRoom';
 import { ActiveDiscussionRoom } from '@/components/ActiveDiscussionRoom';
 import { ScorecardView } from '@/components/ScorecardView';
-import { Loader2, AlertCircle, Sparkles } from 'lucide-react';
+import { Loader2, AlertCircle, Sparkles, RotateCcw, ShieldCheck, FileText } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 
 export default function GDRoomPage() {
@@ -27,7 +27,10 @@ export default function GDRoomPage() {
   // Analysis states
   const [analysisResult, setAnalysisResult] = useState<GDResult | null>(null);
   const [analysisFeedback, setAnalysisFeedback] = useState<GDFeedback | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [allParticipantsOverview, setAllParticipantsOverview] = useState<ParticipantScoreOverview[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // Load initial session
   useEffect(() => {
@@ -50,6 +53,7 @@ export default function GDRoomPage() {
         setSession(data.session);
         setParticipants(data.participants || []);
         setTranscripts(data.transcripts || []);
+        setSelectedUserId(user.id);
 
         // Also ensure user is registered as participant in database
         fetch('/api/gd/join', {
@@ -74,26 +78,54 @@ export default function GDRoomPage() {
   }, [sessionId, user, authLoading]);
 
   // Fetch AI scorecard when discussion is COMPLETED
-  const fetchAnalysis = useCallback(async (sessId: string, userId: string) => {
+  const fetchAnalysis = useCallback(async (sessId: string, targetUid?: string) => {
+    if (!user) return;
     setIsAnalyzing(true);
+    setAnalysisError(null);
+    const uid = targetUid || selectedUserId || user.id;
+
     try {
+      // 1. Fetch individual scorecard for current target user
       const res = await fetch('/api/gd/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: sessId, targetUserId: userId }),
+        body: JSON.stringify({ sessionId: sessId, targetUserId: uid }),
       });
 
       const data = await res.json();
-      if (data.success && data.result && data.feedback) {
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Analysis generation failed.');
+      }
+
+      if (data.result && data.feedback) {
         setAnalysisResult(data.result);
         setAnalysisFeedback(data.feedback);
       }
-    } catch (err) {
+
+      // 2. If host, also fetch full session overview for leaderboard
+      const isHostUser = session?.host_id === user.id;
+      if (isHostUser) {
+        try {
+          const overviewRes = await fetch('/api/gd/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: sessId, fetchAll: true }),
+          });
+          const overviewData = await overviewRes.json();
+          if (overviewData.success && Array.isArray(overviewData.overview)) {
+            setAllParticipantsOverview(overviewData.overview);
+          }
+        } catch (overviewErr) {
+          console.warn('Overview fetch note:', overviewErr);
+        }
+      }
+    } catch (err: any) {
       console.error('Error fetching AI analysis:', err);
+      setAnalysisError(err.message || 'AI analysis temporarily unavailable.');
     } finally {
       setIsAnalyzing(false);
     }
-  }, []);
+  }, [user, selectedUserId, session?.host_id]);
 
   // Multi-device Realtime Sync Hook
   const {
@@ -105,6 +137,7 @@ export default function GDRoomPage() {
     broadcastHostStarted,
     broadcastHostEnded,
     broadcastNewTranscript,
+    broadcastTurnChange,
     broadcastSpeakerState,
     sendWebRTCSignal,
   } = useGDRealtime({
@@ -129,10 +162,10 @@ export default function GDRoomPage() {
 
   // Watch for session status changing to COMPLETED across devices
   useEffect(() => {
-    if (realtimeSession.status === 'COMPLETED' && user && !analysisResult && !isAnalyzing) {
+    if (realtimeSession.status === 'COMPLETED' && user && !analysisResult && !isAnalyzing && !analysisError) {
       fetchAnalysis(realtimeSession.id, user.id);
     }
-  }, [realtimeSession.status, user, analysisResult, isAnalyzing, fetchAnalysis]);
+  }, [realtimeSession.status, user, analysisResult, isAnalyzing, analysisError, fetchAnalysis]);
 
   // Host Action: Start Discussion
   const handleHostStartDiscussion = async () => {
@@ -177,6 +210,11 @@ export default function GDRoomPage() {
     }
   };
 
+  const handleSelectParticipant = (targetUid: string) => {
+    setSelectedUserId(targetUid);
+    fetchAnalysis(realtimeSession.id, targetUid);
+  };
+
   if (loading || authLoading) {
     return (
       <div className="min-h-[75vh] flex flex-col items-center justify-center text-slate-400 space-y-3">
@@ -202,12 +240,13 @@ export default function GDRoomPage() {
     );
   }
 
-  const currentParticipant = realtimeParticipants.find(p => p.user_id === user?.id) || {
-    id: user?.id || 'temp',
+  const effectiveUserId = selectedUserId || user?.id || 'temp';
+  const displayedParticipant = realtimeParticipants.find(p => p.user_id === effectiveUserId) || {
+    id: effectiveUserId,
     session_id: session.id,
-    user_id: user?.id || 'temp',
-    participant_name: user?.name || 'Participant',
-    is_host: session.host_id === user?.id,
+    user_id: effectiveUserId,
+    participant_name: effectiveUserId === user?.id ? (user?.name || 'Participant') : 'Participant',
+    is_host: session.host_id === effectiveUserId,
     joined_at: new Date().toISOString(),
     status: 'JOINED' as const,
   };
@@ -216,7 +255,7 @@ export default function GDRoomPage() {
 
   // View 1: Post-Discussion Scorecard & AI Feedback View
   if (realtimeSession.status === 'COMPLETED') {
-    if (isAnalyzing || !analysisResult || !analysisFeedback) {
+    if (isAnalyzing) {
       return (
         <div className="min-h-[75vh] flex flex-col items-center justify-center text-center p-6 space-y-4 animate-in fade-in">
           <div className="relative">
@@ -230,14 +269,45 @@ export default function GDRoomPage() {
           </div>
           <div>
             <h2 className="text-2xl font-black text-white">
-              Gemini AI is Analyzing Your Discussion...
+              Gemini AI is Analyzing Discussion Transcripts...
             </h2>
             <p className="text-xs text-slate-400 max-w-md mx-auto mt-1 leading-relaxed">
-              Evaluating speech transcripts across 10 competency dimensions, analyzing speaking time, detecting filler words, and compiling evidence-backed feedback.
+              Evaluating individual spoken contributions across 11 competency dimensions, analyzing speaking time, detecting filler words, and compiling evidence-backed recommendations.
             </p>
           </div>
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-xs text-emerald-400 font-mono">
             <Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing participant speech data...
+          </div>
+        </div>
+      );
+    }
+
+    if (analysisError || !analysisResult || !analysisFeedback) {
+      return (
+        <div className="min-h-[75vh] flex items-center justify-center p-4 animate-in fade-in">
+          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-4 shadow-2xl">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+              <AlertCircle className="w-7 h-7" />
+            </div>
+            <div>
+              <h2 className="text-xl font-black text-white">
+                Discussion completed.
+              </h2>
+              <p className="text-xs text-emerald-400 font-semibold mt-1">
+                Your transcript has been safely saved.
+              </p>
+              <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                AI analysis is temporarily unavailable. Please retry analysis.
+              </p>
+            </div>
+            <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <button
+                onClick={() => fetchAnalysis(realtimeSession.id, user?.id)}
+                className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-emerald-400 to-cyan-400 hover:from-emerald-300 hover:to-cyan-300 text-slate-950 font-black text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
+              >
+                <RotateCcw className="w-4 h-4" /> Retry Analysis
+              </button>
+            </div>
           </div>
         </div>
       );
@@ -248,8 +318,12 @@ export default function GDRoomPage() {
         session={realtimeSession}
         result={analysisResult}
         feedback={analysisFeedback}
-        participant={currentParticipant}
+        participant={displayedParticipant}
         isHost={isHost}
+        allParticipantsOverview={allParticipantsOverview}
+        allTranscripts={realtimeTranscripts}
+        onSelectParticipant={handleSelectParticipant}
+        onRetryAnalysis={() => fetchAnalysis(realtimeSession.id, user?.id)}
       />
     );
   }
@@ -266,6 +340,7 @@ export default function GDRoomPage() {
         connectionStatus={connectionStatus}
         activeSpeakers={activeSpeakers}
         onNewTranscript={broadcastNewTranscript}
+        onTurnChange={broadcastTurnChange}
         onEndDiscussion={handleHostEndDiscussion}
         onSendWebRTCSignal={sendWebRTCSignal}
         onBroadcastSpeakerState={broadcastSpeakerState}

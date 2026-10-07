@@ -5,7 +5,8 @@ import {
   getTranscripts, 
   getParticipants, 
   getUserResultAndFeedback, 
-  saveResultsAndFeedback 
+  saveResultsAndFeedback,
+  getAllSessionResultsAndFeedbacks 
 } from '@/lib/db';
 import { analyzeIndividualParticipant } from '@/lib/gemini';
 
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { sessionId, targetUserId } = body;
+    const { sessionId, targetUserId, fetchAll } = body;
 
     if (!sessionId) {
       return NextResponse.json({ error: 'Missing session ID.' }, { status: 400 });
@@ -28,10 +29,61 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Session not found.' }, { status: 404 });
     }
 
+    const isHost = session.host_id === user.id;
+
+    // Retrieve full transcripts & participant roster
+    const [transcripts, participants] = await Promise.all([
+      getTranscripts(sessionId),
+      getParticipants(sessionId),
+    ]);
+
+    // Mode A: Fetch or compute all participants for host overview
+    if (fetchAll) {
+      if (!isHost) {
+        return NextResponse.json({ error: 'Forbidden: Only host can view full session leaderboard.' }, { status: 403 });
+      }
+
+      const allResultsFeedbacks = await getAllSessionResultsAndFeedbacks(sessionId);
+      const computedMap = new Map(allResultsFeedbacks.map(item => [item.result.user_id, item]));
+
+      const overviewList = [];
+
+      for (const p of participants) {
+        let item = computedMap.get(p.user_id);
+        if (!item) {
+          try {
+            const { result, feedback } = await analyzeIndividualParticipant(
+              sessionId,
+              session.topic,
+              p,
+              transcripts,
+              participants
+            );
+            item = await saveResultsAndFeedback(result, feedback);
+          } catch (pErr) {
+            console.warn(`Error generating analysis for ${p.participant_name}:`, pErr);
+          }
+        }
+        if (item) {
+          overviewList.push({
+            participant: p,
+            result: item.result,
+            feedback: item.feedback,
+          });
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        overview: overviewList,
+      });
+    }
+
+    // Mode B: Single participant scorecard
     const requestedUserId = targetUserId || user.id;
 
     // Security: non-hosts can only view their own score/feedback
-    if (requestedUserId !== user.id && session.host_id !== user.id) {
+    if (requestedUserId !== user.id && !isHost) {
       return NextResponse.json({ error: 'Forbidden: You can only access your own individual scorecard.' }, { status: 403 });
     }
 
@@ -47,16 +99,11 @@ export async function POST(request: Request) {
     }
 
     // 2. If not computed yet, compute with Gemini AI now
-    const [transcripts, participants] = await Promise.all([
-      getTranscripts(sessionId),
-      getParticipants(sessionId),
-    ]);
-
     const targetParticipant = participants.find(p => p.user_id === requestedUserId) || {
       id: crypto.randomUUID(),
       session_id: sessionId,
       user_id: requestedUserId,
-      participant_name: user.name,
+      participant_name: requestedUserId === user.id ? user.name : 'Participant',
       is_host: session.host_id === requestedUserId,
       joined_at: new Date().toISOString(),
       status: 'JOINED' as const,

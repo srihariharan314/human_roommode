@@ -23,12 +23,31 @@ export function useSpeechRecognition({ onFinalTranscript, enabled }: UseSpeechRe
   const animationFrameRef = useRef<number | null>(null);
   const speechStartRef = useRef<number>(0);
   const restartTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isEnabledRef = useRef(enabled);
-  const lastProcessedTextRef = useRef<string>('');
+  const currentInterimRef = useRef<string>('');
+  const onFinalCallbackRef = useRef(onFinalTranscript);
 
   useEffect(() => {
     isEnabledRef.current = enabled;
   }, [enabled]);
+
+  useEffect(() => {
+    onFinalCallbackRef.current = onFinalTranscript;
+  }, [onFinalTranscript]);
+
+  // Flush any pending interim speech as final transcript
+  const flushInterim = useCallback(() => {
+    const textToCommit = currentInterimRef.current.trim();
+    if (textToCommit.length > 0) {
+      const endMs = Date.now();
+      const startMs = speechStartRef.current || (endMs - 2000);
+      onFinalCallbackRef.current(textToCommit, startMs, endMs);
+      currentInterimRef.current = '';
+      setInterimText('');
+      speechStartRef.current = Date.now();
+    }
+  }, []);
 
   // Audio level monitoring via Web Audio API
   const startAudioAnalysis = useCallback(async () => {
@@ -73,7 +92,7 @@ export function useSpeechRecognition({ onFinalTranscript, enabled }: UseSpeechRe
           const normalized = Math.min(100, Math.round((average / 128) * 100));
 
           setAudioLevel(normalized);
-          const speakingNow = normalized > 15;
+          const speakingNow = normalized > 12;
           setIsSpeaking(speakingNow);
 
           if (isEnabledRef.current) {
@@ -122,9 +141,14 @@ export function useSpeechRecognition({ onFinalTranscript, enabled }: UseSpeechRe
   // Speech recognition initialization & lifecycle
   useEffect(() => {
     if (!enabled) {
+      // Flush any pending text before shutting down
+      flushInterim();
       setMicStatus('MUTED');
       if (restartTimeoutRef.current) {
         clearTimeout(restartTimeoutRef.current);
+      }
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
       }
       if (recognitionRef.current) {
         try {
@@ -139,7 +163,7 @@ export function useSpeechRecognition({ onFinalTranscript, enabled }: UseSpeechRe
 
     if (!SpeechRecognition) {
       setMicStatus('UNAVAILABLE');
-      setErrorMessage('Browser speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      setErrorMessage('Browser speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari, or use the text conversation box below.');
       return;
     }
 
@@ -150,45 +174,69 @@ export function useSpeechRecognition({ onFinalTranscript, enabled }: UseSpeechRe
 
     recognition.onstart = () => {
       setMicStatus('READY');
-      speechStartRef.current = Date.now();
+      if (!speechStartRef.current) {
+        speechStartRef.current = Date.now();
+      }
     };
 
     recognition.onresult = (event: any) => {
-      let currentInterim = '';
+      let fullInterim = '';
+      let hasFinal = false;
+
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         const item = event.results[i];
         const transcriptText = (item[0]?.transcript || '').trim();
 
         if (item.isFinal) {
+          hasFinal = true;
           const endMs = Date.now();
-          const startMs = speechStartRef.current || (endMs - 3000);
+          const startMs = speechStartRef.current || (endMs - 2500);
           
-          if (transcriptText.length > 0 && transcriptText !== lastProcessedTextRef.current) {
-            lastProcessedTextRef.current = transcriptText;
-            onFinalTranscript(transcriptText, startMs, endMs);
+          if (transcriptText.length > 0) {
+            onFinalCallbackRef.current(transcriptText, startMs, endMs);
           }
-          currentInterim = '';
+          currentInterimRef.current = '';
+          setInterimText('');
           speechStartRef.current = Date.now();
         } else {
-          currentInterim += transcriptText;
+          fullInterim += (fullInterim ? ' ' : '') + transcriptText;
         }
       }
-      setInterimText(currentInterim);
+
+      if (!hasFinal && fullInterim.length > 0) {
+        currentInterimRef.current = fullInterim;
+        setInterimText(fullInterim);
+
+        // Auto-commit if user pauses for 1.4 seconds after speaking a substantive sentence
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+        }
+        silenceTimerRef.current = setTimeout(() => {
+          if (currentInterimRef.current.trim().length > 0) {
+            flushInterim();
+          }
+        }, 1400);
+      }
     };
 
     recognition.onerror = (event: any) => {
       if (event.error === 'not-allowed') {
         setMicStatus('PERMISSION_REQUIRED');
-        setErrorMessage('Microphone access denied. Click the lock/settings icon in the URL bar to allow microphone.');
+        setErrorMessage('Microphone access denied. Click the lock/settings icon in your browser address bar to allow microphone.');
       } else if (event.error === 'no-speech') {
         // Normal silence timeout, ignore
+      } else if (event.error === 'network') {
+        console.warn('Speech recognition network blip, recovering...');
       } else {
-        console.warn('Speech recognition warning:', event.error);
+        console.warn('Speech recognition event:', event.error);
       }
     };
 
     recognition.onend = () => {
-      // Graceful auto-restart with backoff if still enabled
+      // Flush any lingering interim text so words are not lost
+      flushInterim();
+
+      // Graceful auto-restart with backoff if still active & enabled
       if (isEnabledRef.current) {
         restartTimeoutRef.current = setTimeout(() => {
           try {
@@ -198,7 +246,7 @@ export function useSpeechRecognition({ onFinalTranscript, enabled }: UseSpeechRe
           } catch {
             // Already started or restarting
           }
-        }, 300);
+        }, 150);
       }
     };
 
@@ -215,12 +263,17 @@ export function useSpeechRecognition({ onFinalTranscript, enabled }: UseSpeechRe
       if (restartTimeoutRef.current) {
         clearTimeout(restartTimeoutRef.current);
       }
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+      }
+      flushInterim();
       try {
         recognition.stop();
       } catch {}
       stopAudioAnalysis();
+      setInterimText('');
     };
-  }, [enabled, onFinalTranscript, startAudioAnalysis, stopAudioAnalysis]);
+  }, [enabled, flushInterim, startAudioAnalysis, stopAudioAnalysis]);
 
   return {
     micStatus,
@@ -228,5 +281,6 @@ export function useSpeechRecognition({ onFinalTranscript, enabled }: UseSpeechRe
     audioLevel,
     isSpeaking,
     errorMessage,
+    flushInterim,
   };
 }
