@@ -41,9 +41,43 @@ export function useGDRealtime({
       const res = await fetch(`/api/gd/session/${sessionId}`);
       if (res.ok) {
         const data = await res.json();
-        if (data.session) setSession(data.session);
-        if (data.participants) setParticipants(data.participants);
-        if (data.transcripts) setTranscripts(data.transcripts);
+        if (data.session) {
+          setSession(prev => {
+            // Never regress an ACTIVE or COMPLETED session back to WAITING
+            const resolvedStatus = 
+              (prev.status === 'ACTIVE' && data.session.status === 'WAITING')
+                ? 'ACTIVE'
+                : (prev.status === 'COMPLETED' && data.session.status !== 'COMPLETED')
+                ? 'COMPLETED'
+                : data.session.status;
+
+            return {
+              ...prev,
+              ...data.session,
+              status: resolvedStatus,
+              current_speaker_id: data.session.current_speaker_id || prev.current_speaker_id,
+              current_turn_number: data.session.current_turn_number || prev.current_turn_number,
+            };
+          });
+        }
+        if (data.participants) {
+          setParticipants(prev => {
+            const map = new Map<string, Participant>();
+            data.participants.forEach((p: Participant) => map.set(p.user_id, p));
+            prev.forEach(p => {
+              if (!map.has(p.user_id)) map.set(p.user_id, p);
+            });
+            return Array.from(map.values());
+          });
+        }
+        if (data.transcripts) {
+          setTranscripts(prev => {
+            const map = new Map<string, TranscriptItem>();
+            data.transcripts.forEach((t: TranscriptItem) => map.set(t.id, t));
+            prev.forEach(t => map.set(t.id, t));
+            return Array.from(map.values());
+          });
+        }
       }
     } catch (err) {
       console.warn('Refresh state failed:', err);
@@ -53,14 +87,21 @@ export function useGDRealtime({
   // Synchronize initial session data loaded from server
   useEffect(() => {
     if (initialSession && initialSession.topic) {
-      setSession(prev => ({
-        ...initialSession,
-        ...prev,
-        topic: initialSession.topic,
-        room_code: initialSession.room_code || prev.room_code,
-        host_id: initialSession.host_id || prev.host_id,
-        topic_materials: initialSession.topic_materials || prev.topic_materials,
-      }));
+      setSession(prev => {
+        const status = (prev.status === 'ACTIVE' || prev.status === 'COMPLETED')
+          ? prev.status
+          : (initialSession.status || prev.status);
+
+        return {
+          ...initialSession,
+          ...prev,
+          status,
+          topic: initialSession.topic,
+          room_code: initialSession.room_code || prev.room_code,
+          host_id: initialSession.host_id || prev.host_id,
+          topic_materials: initialSession.topic_materials || prev.topic_materials,
+        };
+      });
     }
   }, [initialSession]);
 
@@ -272,8 +313,9 @@ export function useGDRealtime({
 
   // Methods to broadcast events to peers
   const broadcastHostStarted = useCallback((startedSession: GDSession) => {
-    setSession(startedSession);
+    setSession(prev => ({ ...prev, ...startedSession, status: 'ACTIVE' }));
     const payload = {
+      status: 'ACTIVE',
       started_at: startedSession.started_at,
       gd_deadline: startedSession.gd_deadline,
       current_speaker_id: startedSession.current_speaker_id,

@@ -96,7 +96,15 @@ export default function GDRoomPage() {
           throw new Error(data.error || 'Session not found.');
         }
 
-        setSession(data.session);
+        setSession(prev => {
+          if (!prev) return data.session;
+          const status = (prev.status === 'ACTIVE' && data.session.status === 'WAITING')
+            ? 'ACTIVE'
+            : (prev.status === 'COMPLETED' && data.session.status !== 'COMPLETED')
+            ? 'COMPLETED'
+            : data.session.status;
+          return { ...data.session, status };
+        });
         setParticipants(data.participants || []);
         setTranscripts(data.transcripts || []);
 
@@ -126,7 +134,7 @@ export default function GDRoomPage() {
     }
 
     loadSession();
-  }, [sessionId, user, authLoading, fetchAnalysis]);
+  }, [sessionId, user?.id, authLoading, fetchAnalysis]);
 
 
   // Multi-device Realtime Sync Hook
@@ -168,6 +176,13 @@ export default function GDRoomPage() {
       fetchAnalysis(realtimeSession.id, user.id);
     }
   }, [realtimeSession.status, user, analysisResult, isAnalyzing, analysisError, fetchAnalysis]);
+
+  // Keep page session state aligned with realtimeSession status
+  useEffect(() => {
+    if (realtimeSession?.status && session && realtimeSession.status !== session.status) {
+      setSession(prev => prev ? { ...prev, status: realtimeSession.status } : realtimeSession);
+    }
+  }, [realtimeSession?.status, session?.status]);
 
   // Host Action: Start Discussion
   const handleHostStartDiscussion = async () => {
@@ -291,7 +306,7 @@ export default function GDRoomPage() {
     status: 'JOINED' as const,
   };
 
-  const isHost = session.host_id === user?.id;
+  const isHost = session.host_id === user?.id || realtimeParticipants.some(p => p.user_id === user?.id && p.is_host);
 
   // View 1: Post-Discussion Scorecard & AI Feedback View
   if (realtimeSession.status === 'COMPLETED') {

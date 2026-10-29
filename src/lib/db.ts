@@ -183,6 +183,8 @@ export async function getSessionByRoomCode(roomCode: string): Promise<GDSession 
 }
 
 export async function getSessionById(sessionId: string): Promise<GDSession | null> {
+  const cached = memoryStore.sessions.get(sessionId);
+
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase
@@ -192,14 +194,29 @@ export async function getSessionById(sessionId: string): Promise<GDSession | nul
       .single();
 
     if (data && !error) {
-      memoryStore.sessions.set(data.id, data as GDSession);
-      return data as GDSession;
+      // Guard against stale DB reads reverting an active or completed discussion
+      const status = (cached?.status === 'ACTIVE' && data.status === 'WAITING')
+        ? 'ACTIVE'
+        : (cached?.status === 'COMPLETED' && data.status !== 'COMPLETED')
+        ? 'COMPLETED'
+        : data.status;
+
+      const merged: GDSession = {
+        ...data,
+        ...cached,
+        status,
+        current_speaker_id: cached?.current_speaker_id || data.current_speaker_id,
+        current_turn_number: cached?.current_turn_number || data.current_turn_number || 1,
+        turn_status: cached?.turn_status || data.turn_status,
+      };
+      memoryStore.sessions.set(data.id, merged);
+      return merged;
     }
   } catch (err) {
     // Fall through
   }
 
-  return memoryStore.sessions.get(sessionId) || null;
+  return cached || null;
 }
 
 export async function updateSessionStatus(
@@ -210,7 +227,10 @@ export async function updateSessionStatus(
   const session = await getSessionById(sessionId);
   if (!session) return null;
 
-  if (session.host_id !== hostId) {
+  const participants = memoryStore.participants.get(sessionId) || [];
+  const isHostParticipant = participants.some(p => p.user_id === hostId && p.is_host);
+
+  if (session.host_id !== hostId && !isHostParticipant) {
     throw new Error('Unauthorized: Only the host can change session state.');
   }
 
@@ -223,9 +243,8 @@ export async function updateSessionStatus(
     updates.turn_status = 'speaking';
     
     // Choose initial speaker (first participant or host)
-    const existingParticipants = memoryStore.participants.get(sessionId) || [];
-    if (existingParticipants.length > 0) {
-      updates.current_speaker_id = existingParticipants[0].user_id;
+    if (participants.length > 0) {
+      updates.current_speaker_id = participants[0].user_id;
     } else {
       updates.current_speaker_id = hostId;
     }
@@ -239,7 +258,15 @@ export async function updateSessionStatus(
     updates.turn_status = 'completed';
   }
 
-  // Update memory store
+  // Database updates: ONLY columns that exist in the Supabase gd_sessions table
+  const dbUpdates: Record<string, any> = {
+    status: newStatus,
+  };
+  if (updates.started_at !== undefined) dbUpdates.started_at = updates.started_at;
+  if (updates.ended_at !== undefined) dbUpdates.ended_at = updates.ended_at;
+  if (updates.gd_deadline !== undefined) dbUpdates.gd_deadline = updates.gd_deadline;
+
+  // Update memory store with full runtime state
   const updatedSession = { ...session, ...updates };
   memoryStore.sessions.set(sessionId, updatedSession);
 
@@ -247,13 +274,17 @@ export async function updateSessionStatus(
     const supabase = createAdminClient();
     const { data, error } = await supabase
       .from('gd_sessions')
-      .update(updates)
+      .update(dbUpdates)
       .eq('id', sessionId)
       .select()
       .single();
 
     if (data && !error) {
-      return data as GDSession;
+      const merged = { ...updatedSession, ...data };
+      memoryStore.sessions.set(sessionId, merged);
+      return merged;
+    } else if (error) {
+      console.warn('Supabase updateSessionStatus notice:', error.message);
     }
   } catch (err) {
     // Fallback

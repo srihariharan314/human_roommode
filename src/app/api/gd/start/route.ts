@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
-import { getSessionById, updateSessionStatus } from '@/lib/db';
+import { getSessionById, updateSessionStatus, getParticipants } from '@/lib/db';
 
 export async function POST(request: Request) {
   try {
@@ -21,12 +21,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Session not found.' }, { status: 404 });
     }
 
-    // Strict host authorization
-    if (session.host_id !== user.id) {
+    // Host authorization: verify by session.host_id or is_host participant
+    const participants = await getParticipants(sessionId);
+    const isHostParticipant = participants.some(p => p.user_id === user.id && p.is_host);
+
+    if (session.host_id !== user.id && !isHostParticipant) {
       return NextResponse.json({ error: 'Forbidden: Only the host can start the discussion.' }, { status: 403 });
     }
 
-    if (session.status !== 'WAITING') {
+    if (session.status === 'ACTIVE') {
       return NextResponse.json({ success: true, session });
     }
 
