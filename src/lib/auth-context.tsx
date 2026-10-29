@@ -9,6 +9,7 @@ interface AuthContextType {
   loading: boolean;
   isSupabaseConfigured: boolean;
   signInWithGoogle: () => Promise<void>;
+  signInAsGuest: (name: string, email?: string) => Promise<UserProfile>;
   signOut: () => Promise<void>;
 }
 
@@ -18,16 +19,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXTPUBLIC_SUPABASE_URL;
   const isSupabaseConfigured = Boolean(
     supabaseUrl && 
     !supabaseUrl.includes('placeholder') && 
     supabaseUrl.startsWith('https://')
   );
 
-  // Initialize and listen to Supabase Auth state
+  // Helper: persist profile to cookies & localStorage for seamless server & client auth
+  const persistUser = (profile: UserProfile | null) => {
+    if (typeof window === 'undefined') return;
+    if (profile) {
+      localStorage.setItem('intelligd_user', JSON.stringify(profile));
+      document.cookie = `intelligd_user=${encodeURIComponent(JSON.stringify(profile))}; path=/; max-age=2592000; SameSite=Lax`;
+    } else {
+      localStorage.removeItem('intelligd_user');
+      document.cookie = `intelligd_user=; path=/; max-age=0; SameSite=Lax`;
+    }
+  };
+
+  // Initialize Auth state
   useEffect(() => {
     let mounted = true;
+
+    // 1. Immediately check localStorage/cookie for cached profile
+    try {
+      if (typeof window !== 'undefined') {
+        const cached = localStorage.getItem('intelligd_user');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && parsed.id && parsed.name) {
+            setUser(parsed);
+          }
+        }
+      }
+    } catch (e) {
+      // Storage parse error
+    }
 
     if (!isSupabaseConfigured) {
       setLoading(false);
@@ -50,17 +78,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           };
           if (mounted) {
             setUser(profile);
-          }
-        } else {
-          if (mounted) {
-            setUser(null);
+            persistUser(profile);
           }
         }
       } catch (err) {
-        console.warn('Supabase auth state resolution note:', err);
-        if (mounted) {
-          setUser(null);
-        }
+        // Supabase offline/error fallback
       } finally {
         if (mounted) {
           setLoading(false);
@@ -71,37 +93,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loadUser();
 
     // Subscribe to auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.user) {
-        const profile: UserProfile = {
-          id: session.user.id,
-          name: session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User',
-          email: session.user.email || '',
-          avatar_url: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || `https://api.dicebear.com/7.x/avataaars/svg?seed=${session.user.id}`,
-          created_at: session.user.created_at,
-        };
-        if (mounted) {
-          setUser(profile);
-          setLoading(false);
+    try {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        if (session?.user) {
+          const profile: UserProfile = {
+            id: session.user.id,
+            name: session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User',
+            email: session.user.email || '',
+            avatar_url: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || `https://api.dicebear.com/7.x/avataaars/svg?seed=${session.user.id}`,
+            created_at: session.user.created_at,
+          };
+          if (mounted) {
+            setUser(profile);
+            persistUser(profile);
+            setLoading(false);
+          }
         }
-      } else {
-        if (mounted) {
-          setUser(null);
-          setLoading(false);
-        }
-      }
-    });
+      });
 
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+      return () => {
+        mounted = false;
+        subscription.unsubscribe();
+      };
+    } catch (subErr) {
+      setLoading(false);
+    }
   }, [isSupabaseConfigured]);
+
+  const signInAsGuest = async (name: string, email?: string): Promise<UserProfile> => {
+    const cleanName = name.trim();
+    if (!cleanName) {
+      throw new Error('Please enter your name.');
+    }
+
+    let guestId = '';
+    if (typeof window !== 'undefined') {
+      guestId = localStorage.getItem('intelligd_guest_id') || '';
+    }
+    if (!guestId) {
+      guestId = crypto.randomUUID();
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('intelligd_guest_id', guestId);
+      }
+    }
+
+    const profile: UserProfile = {
+      id: guestId,
+      name: cleanName,
+      email: email?.trim() || `${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}@participant.gd`,
+      avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(guestId)}`,
+      created_at: new Date().toISOString(),
+    };
+
+    setUser(profile);
+    persistUser(profile);
+    return profile;
+  };
 
   const signInWithGoogle = async () => {
     if (!isSupabaseConfigured) {
       throw new Error(
-        'Supabase URL is not configured yet. Please add your real NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to your .env.local file (or Vercel environment variables).'
+        'Supabase is not configured yet. You can join directly by entering your participant name above.'
       );
     }
 
@@ -132,6 +184,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
     setUser(null);
+    persistUser(null);
   };
 
   return (
@@ -141,6 +194,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         isSupabaseConfigured,
         signInWithGoogle,
+        signInAsGuest,
         signOut,
       }}
     >
@@ -156,3 +210,4 @@ export function useAuth() {
   }
   return context;
 }
+

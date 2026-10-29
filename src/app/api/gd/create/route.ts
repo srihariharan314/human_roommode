@@ -1,17 +1,27 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
-import { createGDSession, addOrGetParticipant } from '@/lib/db';
+import { createGDSession, addOrGetParticipant, getOrCreateUserProfile } from '@/lib/db';
 import { generateTopicPreparation } from '@/lib/gemini';
 
 export async function POST(request: Request) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized. Please sign in to create a GD session.' }, { status: 401 });
-    }
-
     const body = await request.json();
-    const { topic, maxParticipants = 10, durationSeconds = 900, generatePrep = true } = body;
+    const { topic, maxParticipants = 10, durationSeconds = 900, generatePrep = true, hostName, userName } = body || {};
+
+    let user = await getCurrentUser();
+    let isNewGuest = false;
+
+    if (!user) {
+      const requestedName = (hostName || userName || 'Discussion Host').trim();
+      const guestId = crypto.randomUUID();
+      user = await getOrCreateUserProfile({
+        id: guestId,
+        name: requestedName,
+        email: `${requestedName.toLowerCase().replace(/[^a-z0-9]/g, '')}@participant.gd`,
+        avatar_url: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(guestId)}`,
+      });
+      isNewGuest = true;
+    }
 
     if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
       return NextResponse.json({ error: 'Please provide a valid discussion topic.' }, { status: 400 });
@@ -50,14 +60,26 @@ export async function POST(request: Request) {
     const cleanAppUrl = appUrl.replace(/\/$/, '');
     const joinUrl = `${cleanAppUrl}/human-gd/join/${session.room_code}`;
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       session,
       joinUrl,
       roomCode: session.room_code,
+      user,
     });
+
+    if (isNewGuest && user) {
+      response.cookies.set('intelligd_user', encodeURIComponent(JSON.stringify(user)), {
+        path: '/',
+        maxAge: 2592000,
+        sameSite: 'lax',
+      });
+    }
+
+    return response;
   } catch (error: any) {
     console.error('Error creating GD session:', error);
+
     return NextResponse.json({ error: error.message || 'Failed to create GD session' }, { status: 500 });
   }
 }

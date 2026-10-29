@@ -114,7 +114,12 @@ export default function JoinByRoomCodePage() {
 
       </div>
 
-      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+      <AuthModal 
+        isOpen={showAuthModal} 
+        onClose={() => setShowAuthModal(false)} 
+        title={`Join Room ${roomCode?.toUpperCase() || ''}`}
+        subtitle="Enter your participant name or sign in to enter the discussion room."
+      />
     </div>
   );
 }

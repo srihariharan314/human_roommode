@@ -1,8 +1,10 @@
 import { createClient } from '@/lib/supabase/server';
 import { UserProfile } from '@/types';
 import { getOrCreateUserProfile } from '@/lib/db';
+import { cookies } from 'next/headers';
 
 export async function getCurrentUser(): Promise<UserProfile | null> {
+  // 1. Try Supabase Auth
   try {
     const supabase = await createClient();
     const { data: { user }, error } = await supabase.auth.getUser();
@@ -16,8 +18,28 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
       });
     }
   } catch (err) {
-    console.warn('Supabase auth check note:', err);
+    // Supabase auth check note
+  }
+
+  // 2. Try cookie session fallback (for guest / instant participant profiles)
+  try {
+    const cookieStore = await cookies();
+    const userCookie = cookieStore.get('intelligd_user')?.value;
+    if (userCookie) {
+      const parsed = JSON.parse(decodeURIComponent(userCookie));
+      if (parsed && parsed.id && parsed.name) {
+        return getOrCreateUserProfile({
+          id: parsed.id,
+          name: parsed.name,
+          email: parsed.email || `${parsed.id}@participant.gd`,
+          avatar_url: parsed.avatar_url,
+        });
+      }
+    }
+  } catch (cookieErr) {
+    // Cookie parse fallback
   }
 
   return null;
 }
+

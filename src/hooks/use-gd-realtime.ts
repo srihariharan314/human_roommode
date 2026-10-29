@@ -50,6 +50,43 @@ export function useGDRealtime({
     }
   }, [sessionId]);
 
+  // Synchronize initial session data loaded from server
+  useEffect(() => {
+    if (initialSession && initialSession.topic) {
+      setSession(prev => ({
+        ...initialSession,
+        ...prev,
+        topic: initialSession.topic,
+        room_code: initialSession.room_code || prev.room_code,
+        host_id: initialSession.host_id || prev.host_id,
+        topic_materials: initialSession.topic_materials || prev.topic_materials,
+      }));
+    }
+  }, [initialSession]);
+
+  useEffect(() => {
+    if (initialParticipants && initialParticipants.length > 0) {
+      setParticipants(prev => {
+        const map = new Map<string, Participant>();
+        initialParticipants.forEach(p => map.set(p.user_id, p));
+        prev.forEach(p => map.set(p.user_id, p));
+        return Array.from(map.values());
+      });
+    }
+  }, [initialParticipants]);
+
+  useEffect(() => {
+    if (initialTranscripts && initialTranscripts.length > 0) {
+      setTranscripts(prev => {
+        const map = new Map<string, TranscriptItem>();
+        initialTranscripts.forEach(t => map.set(t.id, t));
+        prev.forEach(t => map.set(t.id, t));
+        return Array.from(map.values());
+      });
+    }
+  }, [initialTranscripts]);
+
+
   // Setup Realtime connections
   useEffect(() => {
     let mounted = true;

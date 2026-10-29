@@ -35,9 +35,10 @@ const SUGGESTED_TOPICS = [
 
 export function CreateGDModal({ isOpen, onClose }: CreateGDModalProps) {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, signInAsGuest } = useAuth();
 
   const [topic, setTopic] = useState(SUGGESTED_TOPICS[0]);
+  const [hostName, setHostName] = useState('');
   const [maxParticipants, setMaxParticipants] = useState(8);
   const [durationMinutes, setDurationMinutes] = useState(15);
   const [loading, setLoading] = useState(false);
@@ -78,10 +79,20 @@ export function CreateGDModal({ isOpen, onClose }: CreateGDModalProps) {
       return;
     }
 
+    if (!user && !hostName.trim()) {
+      setError('Please enter your name as host.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
+      let activeUser = user;
+      if (!activeUser && hostName.trim()) {
+        activeUser = await signInAsGuest(hostName.trim());
+      }
+
       const res = await fetch('/api/gd/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -90,6 +101,7 @@ export function CreateGDModal({ isOpen, onClose }: CreateGDModalProps) {
           maxParticipants,
           durationSeconds: durationMinutes * 60,
           generatePrep: true,
+          hostName: activeUser?.name || hostName.trim(),
         }),
       });
 
@@ -109,6 +121,7 @@ export function CreateGDModal({ isOpen, onClose }: CreateGDModalProps) {
       setLoading(false);
     }
   };
+
 
   return (
     <>
@@ -146,11 +159,31 @@ export function CreateGDModal({ isOpen, onClose }: CreateGDModalProps) {
           {/* Form */}
           <form onSubmit={handleCreateSession} className="space-y-6 overflow-y-auto pr-1 flex-1">
             
+            {!user && (
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
+                  Host Name (Your Display Name)
+                </label>
+                <div className="relative">
+                  <Users className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={hostName}
+                    onChange={(e) => setHostName(e.target.value)}
+                    placeholder="e.g. Rahul Sharma (Host)"
+                    className="w-full pl-10 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl text-white placeholder-slate-500 text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-medium"
+                    required
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Topic Selection */}
             <div>
               <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
                 Discussion Topic
               </label>
+
               <textarea
                 rows={2}
                 value={topic}

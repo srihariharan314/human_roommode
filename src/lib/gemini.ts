@@ -43,7 +43,7 @@ Provide your output as a STRICT, VALID JSON object with NO markdown formatting, 
 }`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: prompt,
       });
 
@@ -364,7 +364,7 @@ Return STRICT, VALID JSON ONLY (NO markdown backticks, NO surrounding commentary
 }`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: prompt,
       });
 

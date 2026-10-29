@@ -4,6 +4,8 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { X, Users, ArrowRight, Loader2, KeyRound } from 'lucide-react';
 
+import { useAuth } from '@/lib/auth-context';
+
 interface JoinGDModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -11,7 +13,9 @@ interface JoinGDModalProps {
 
 export function JoinGDModal({ isOpen, onClose }: JoinGDModalProps) {
   const router = useRouter();
+  const { user, signInAsGuest } = useAuth();
   const [roomCode, setRoomCode] = useState('');
+  const [participantName, setParticipantName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,14 +40,27 @@ export function JoinGDModal({ isOpen, onClose }: JoinGDModalProps) {
       return;
     }
 
+    if (!user && !participantName.trim()) {
+      setError('Please enter your name to join.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
+      let activeUser = user;
+      if (!activeUser && participantName.trim()) {
+        activeUser = await signInAsGuest(participantName.trim());
+      }
+
       const res = await fetch('/api/gd/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode: cleanCode }),
+        body: JSON.stringify({ 
+          roomCode: cleanCode,
+          participantName: activeUser?.name || participantName.trim()
+        }),
       });
 
       const data = await res.json();
@@ -60,6 +77,7 @@ export function JoinGDModal({ isOpen, onClose }: JoinGDModalProps) {
       setLoading(false);
     }
   };
+
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
@@ -98,6 +116,25 @@ export function JoinGDModal({ isOpen, onClose }: JoinGDModalProps) {
 
         {/* Form */}
         <form onSubmit={handleJoin} className="space-y-4">
+          {!user && (
+            <div>
+              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
+                Your Name
+              </label>
+              <div className="relative">
+                <Users className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={participantName}
+                  onChange={(e) => setParticipantName(e.target.value)}
+                  placeholder="e.g. Alex Morgan"
+                  className="w-full pl-10 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl text-white placeholder-slate-500 font-medium text-sm focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
+                  required
+                />
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
               Room Code or Join Link
@@ -111,16 +148,17 @@ export function JoinGDModal({ isOpen, onClose }: JoinGDModalProps) {
                 placeholder="e.g. IGD-7K42P"
                 className="w-full pl-10 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl text-white placeholder-slate-400 font-mono font-bold tracking-widest text-center text-lg focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all uppercase"
                 required
-                autoFocus
+                autoFocus={Boolean(user)}
               />
             </div>
           </div>
 
           <button
             type="submit"
-            disabled={loading || !roomCode.trim()}
+            disabled={loading || !roomCode.trim() || (!user && !participantName.trim())}
             className="w-full py-3.5 text-xs font-black text-slate-950 bg-gradient-to-r from-cyan-400 to-emerald-400 hover:from-cyan-300 hover:to-emerald-300 rounded-2xl shadow-lg shadow-cyan-500/25 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
           >
+
             {loading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />

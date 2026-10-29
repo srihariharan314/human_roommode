@@ -8,7 +8,7 @@ import { useGDRealtime } from '@/hooks/use-gd-realtime';
 import { WaitingRoom } from '@/components/WaitingRoom';
 import { ActiveDiscussionRoom } from '@/components/ActiveDiscussionRoom';
 import { ScorecardView } from '@/components/ScorecardView';
-import { Loader2, AlertCircle, Sparkles, RotateCcw, ShieldCheck, FileText } from 'lucide-react';
+import { Loader2, AlertCircle, Sparkles, RotateCcw, ShieldCheck, FileText, Users } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 
 export default function GDRoomPage() {
@@ -31,51 +31,6 @@ export default function GDRoomPage() {
   const [allParticipantsOverview, setAllParticipantsOverview] = useState<ParticipantScoreOverview[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-
-  // Load initial session
-  useEffect(() => {
-    async function loadSession() {
-      if (authLoading) return;
-      if (!user) {
-        setLoading(false);
-        setShowAuthModal(true);
-        return;
-      }
-
-      try {
-        const res = await fetch(`/api/gd/session/${sessionId}`);
-        const data = await res.json();
-
-        if (!res.ok || data.error) {
-          throw new Error(data.error || 'Session not found.');
-        }
-
-        setSession(data.session);
-        setParticipants(data.participants || []);
-        setTranscripts(data.transcripts || []);
-        setSelectedUserId(user.id);
-
-        // Also ensure user is registered as participant in database
-        fetch('/api/gd/join', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId }),
-        }).catch(() => {});
-
-        // If completed, fetch or trigger AI analysis
-        if (data.session.status === 'COMPLETED') {
-          fetchAnalysis(data.session.id, user.id);
-        }
-      } catch (err: any) {
-        console.error('Error loading session:', err);
-        setError(err.message || 'Unable to load GD session.');
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadSession();
-  }, [sessionId, user, authLoading]);
 
   // Fetch AI scorecard when discussion is COMPLETED
   const fetchAnalysis = useCallback(async (sessId: string, targetUid?: string) => {
@@ -126,6 +81,53 @@ export default function GDRoomPage() {
       setIsAnalyzing(false);
     }
   }, [user, selectedUserId, session?.host_id]);
+
+  // Load initial session
+  useEffect(() => {
+    async function loadSession() {
+      if (authLoading) return;
+      if (!sessionId) return;
+
+      try {
+        const res = await fetch(`/api/gd/session/${sessionId}`);
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          throw new Error(data.error || 'Session not found.');
+        }
+
+        setSession(data.session);
+        setParticipants(data.participants || []);
+        setTranscripts(data.transcripts || []);
+
+        if (user) {
+          setSelectedUserId(user.id);
+          // Also ensure user is registered as participant in database
+          fetch('/api/gd/join', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId }),
+          }).catch(() => {});
+
+          // If completed, fetch or trigger AI analysis
+          if (data.session.status === 'COMPLETED') {
+            fetchAnalysis(data.session.id, user.id);
+          }
+        } else {
+          // Session exists, but prompt user to enter their name or sign in
+          setShowAuthModal(true);
+        }
+      } catch (err: any) {
+        console.error('Error loading session:', err);
+        setError(err.message || 'Unable to load GD session.');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadSession();
+  }, [sessionId, user, authLoading, fetchAnalysis]);
+
 
   // Multi-device Realtime Sync Hook
   const {
@@ -236,9 +238,47 @@ export default function GDRoomPage() {
         >
           Back to Home
         </button>
+        <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
       </div>
     );
   }
+
+  // If room exists but current device has not set a participant profile/name yet
+  if (!user && session) {
+    return (
+      <div className="min-h-[75vh] flex items-center justify-center p-4 animate-in fade-in">
+        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl text-center space-y-6">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400">
+            <Users className="w-8 h-8" />
+          </div>
+          <div>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-bold mb-2">
+              Room {session.room_code}
+            </div>
+            <h2 className="text-xl font-black text-white leading-snug">
+              {session.topic}
+            </h2>
+            <p className="text-xs text-slate-400 mt-2">
+              Enter your participant name or sign in to join this live discussion.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowAuthModal(true)}
+            className="w-full py-3.5 bg-gradient-to-r from-emerald-400 to-cyan-400 hover:from-emerald-300 hover:to-cyan-300 text-slate-950 font-black text-xs rounded-xl shadow-lg transition-all hover:scale-[1.01]"
+          >
+            Enter Participant Name & Join
+          </button>
+        </div>
+        <AuthModal 
+          isOpen={showAuthModal} 
+          onClose={() => setShowAuthModal(false)} 
+          title={`Join Room ${session.room_code}`}
+          subtitle={`Enter your name to participate in: "${session.topic}"`}
+        />
+      </div>
+    );
+  }
+
 
   const effectiveUserId = selectedUserId || user?.id || 'temp';
   const displayedParticipant = realtimeParticipants.find(p => p.user_id === effectiveUserId) || {

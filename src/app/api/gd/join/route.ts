@@ -1,16 +1,32 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
-import { getSessionByRoomCode, getSessionById, addOrGetParticipant, getParticipants } from '@/lib/db';
+import { getSessionByRoomCode, getSessionById, addOrGetParticipant, getParticipants, getOrCreateUserProfile } from '@/lib/db';
 
 export async function POST(request: Request) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized. Please sign in to join a GD.' }, { status: 401 });
+    const body = await request.json();
+    const { roomCode, sessionId, participantName, userName, avatarUrl } = body || {};
+
+    let user = await getCurrentUser();
+
+    // If user is not yet logged in, but provided a participant display name
+    const requestedName = (participantName || userName || '').trim();
+    let isNewGuest = false;
+
+    if (!user && requestedName) {
+      const guestId = crypto.randomUUID();
+      user = await getOrCreateUserProfile({
+        id: guestId,
+        name: requestedName,
+        email: `${requestedName.toLowerCase().replace(/[^a-z0-9]/g, '')}@participant.gd`,
+        avatar_url: avatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(guestId)}`,
+      });
+      isNewGuest = true;
     }
 
-    const body = await request.json();
-    const { roomCode, sessionId } = body;
+    if (!user) {
+      return NextResponse.json({ error: 'Please enter your participant name to join the GD.' }, { status: 401 });
+    }
 
     let session = null;
     if (roomCode) {
@@ -40,16 +56,28 @@ export async function POST(request: Request) {
     const cleanAppUrl = appUrl.replace(/\/$/, '');
     const joinUrl = `${cleanAppUrl}/human-gd/join/${session.room_code}`;
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       session,
       participant,
       participants,
       joinUrl,
       isHost,
+      user,
     });
+
+    if (isNewGuest && user) {
+      response.cookies.set('intelligd_user', encodeURIComponent(JSON.stringify(user)), {
+        path: '/',
+        maxAge: 2592000,
+        sameSite: 'lax',
+      });
+    }
+
+    return response;
   } catch (error: any) {
     console.error('Error joining GD session:', error);
     return NextResponse.json({ error: error.message || 'Failed to join GD session' }, { status: 500 });
   }
 }
+
